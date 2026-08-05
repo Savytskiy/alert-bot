@@ -1,0 +1,13 @@
+[Unit]
+Description=Alert Bot - критические уведомления в Telegram
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/alert_bot
+ExecStart=/root/alert_bot/venv/bin/uvicorn bot.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

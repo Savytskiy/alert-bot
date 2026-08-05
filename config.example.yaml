@@ -1,0 +1,32 @@
+# Скопируйте в config.yaml и заполните bot_token/owner_chat_id.
+# Реальный config.yaml в .gitignore — не коммитьте токены.
+
+bot_token: "PUT_YOUR_BOT_TOKEN_HERE"
+owner_chat_id: 0  # ваш Telegram user id (chat_id личного чата с ботом)
+
+# Через сколько минут тишины по данному fingerprint следующий такой же
+# алерт считается новым инцидентом, а не повтором предыдущего.
+dedup_cooldown_minutes: 15
+
+# Правила по умолчанию для всех проектов. Каждый проект может переопределить
+# любой из уровней в своей секции severity_rules (см. пример ниже).
+default_severity_rules:
+  critical:
+    enabled: true
+    silent: false   # обычное уведомление (со звуком/пушем)
+  warning:
+    enabled: true
+    silent: true    # тихое уведомление
+  info:
+    enabled: true
+    silent: true
+
+# Список проектов заполняется автоматически через `python manage.py add-project <name>`.
+# Добавлять руками тоже можно, но thread_id должен существовать (создан через createForumTopic).
+projects: []
+#  - name: my_service
+#    token: "abc123..."
+#    thread_id: 627641
+#    severity_rules:
+#      info:
+#        enabled: false
