@@ -30,9 +30,19 @@ CREATE TABLE IF NOT EXISTS active_incidents (
     last_seen TEXT NOT NULL,
     count INTEGER NOT NULL DEFAULT 1,
     telegram_message_id INTEGER,
+    escalated_count INTEGER NOT NULL DEFAULT 0,
+    last_escalated_at TEXT,
     PRIMARY KEY (project, fingerprint)
 );
 """
+
+# Columns added after the original schema shipped - CREATE TABLE IF NOT
+# EXISTS above only helps a fresh install, an already-deployed alerts.db
+# needs these ALTERed in by hand (see AlertStore.__init__).
+_MIGRATION_COLUMNS = (
+    ("escalated_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("last_escalated_at", "TEXT"),
+)
 
 
 def _now() -> datetime:
@@ -54,6 +64,8 @@ class ActiveIncident:
     last_seen: datetime
     count: int
     telegram_message_id: int | None
+    escalated_count: int
+    last_escalated_at: datetime | None
 
 
 class AlertStore:
@@ -64,6 +76,13 @@ class AlertStore:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(SCHEMA)
+            self._conn.commit()
+            existing_columns = {
+                row["name"] for row in self._conn.execute("PRAGMA table_info(active_incidents)")
+            }
+            for name, ddl_type in _MIGRATION_COLUMNS:
+                if name not in existing_columns:
+                    self._conn.execute(f"ALTER TABLE active_incidents ADD COLUMN {name} {ddl_type}")
             self._conn.commit()
 
     def record_alert(
@@ -108,6 +127,10 @@ class AlertStore:
             last_seen=last_seen,
             count=row["count"],
             telegram_message_id=row["telegram_message_id"],
+            escalated_count=row["escalated_count"],
+            last_escalated_at=(
+                datetime.fromisoformat(row["last_escalated_at"]) if row["last_escalated_at"] else None
+            ),
         )
 
     def start_incident(
@@ -123,8 +146,9 @@ class AlertStore:
         with self._lock:
             self._conn.execute(
                 """INSERT INTO active_incidents
-                   (project, fingerprint, severity, title, message, first_seen, last_seen, count, telegram_message_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                   (project, fingerprint, severity, title, message, first_seen, last_seen, count,
+                    telegram_message_id, escalated_count, last_escalated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 0, NULL)
                    ON CONFLICT(project, fingerprint) DO UPDATE SET
                      severity=excluded.severity,
                      title=excluded.title,
@@ -132,7 +156,9 @@ class AlertStore:
                      first_seen=excluded.first_seen,
                      last_seen=excluded.last_seen,
                      count=1,
-                     telegram_message_id=excluded.telegram_message_id""",
+                     telegram_message_id=excluded.telegram_message_id,
+                     escalated_count=0,
+                     last_escalated_at=NULL""",
                 (project, fingerprint, severity, title, message, now, now, telegram_message_id),
             )
             self._conn.commit()
@@ -152,6 +178,19 @@ class AlertStore:
                 (project, fingerprint),
             ).fetchone()
             return row["count"]
+
+    def mark_escalated(self, project: str, fingerprint: str) -> None:
+        """Called after sending a "still going" escalation message - records
+        when, so the next escalation waits a full ESCALATION_HOURS again
+        rather than firing on every subsequent bump."""
+        with self._lock:
+            self._conn.execute(
+                """UPDATE active_incidents
+                   SET escalated_count = escalated_count + 1, last_escalated_at = ?
+                   WHERE project = ? AND fingerprint = ?""",
+                (_iso(_now()), project, fingerprint),
+            )
+            self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 from fastapi import FastAPI, HTTPException
@@ -90,6 +90,33 @@ async def webhook(token: str, request: Request) -> JSONResponse:
                 payload.title, payload.message, telegram_message_id=message_id,
             )
             delivered = True
+        else:
+            # A same-fingerprint incident that just keeps getting edited
+            # ("повторилось N раз") is easy to miss - it never re-notifies,
+            # so a warning-severity incident stuck for hours/days looks
+            # identical to a one-off blip unless you scroll up. Once it's
+            # been continuously active (never cooled off past
+            # dedup_cooldown_minutes) for escalation_hours, send a fresh
+            # loud/critical message instead of another silent edit -
+            # repeats every escalation_hours for as long as it's still
+            # going, so a multi-day incident keeps getting flagged.
+            elapsed = now - incident.first_seen
+            threshold = timedelta(hours=config.escalation_hours)
+            since_last_escalation = now - incident.last_escalated_at if incident.last_escalated_at else elapsed
+            if elapsed >= threshold and since_last_escalation >= threshold:
+                hours_running = int(elapsed.total_seconds() // 3600)
+                escalation_title = f"⏰ Инцидент не прекращается уже {hours_running}ч: {payload.title}"
+                escalation_message = f"Повторяется без перерыва, счётчик: {count}."
+                await send_alert(
+                    bot, config.owner_chat_id, project.thread_id, project.name,
+                    "critical", escalation_title, escalation_message,
+                    silent=False, sent_at=now,
+                )
+                store.mark_escalated(project.name, payload.fingerprint)
+                store.record_alert(
+                    project.name, "critical", escalation_title, escalation_message,
+                    payload.fingerprint, delivered_to_telegram=True,
+                )
     else:
         message_id = await send_alert(
             bot, config.owner_chat_id, project.thread_id, project.name,

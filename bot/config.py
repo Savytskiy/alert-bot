@@ -34,6 +34,14 @@ class Config(BaseModel):
     bot_token: str
     owner_chat_id: int
     dedup_cooldown_minutes: int = 15
+    # If the same incident (same project+fingerprint, still within the dedup
+    # cooldown so it never "cooled off") keeps recurring this long without a
+    # gap, send an extra critical/loud message instead of just quietly
+    # editing "повторилось N раз" - a long-running warning-severity incident
+    # is easy to miss otherwise (see the discount_updater incident this was
+    # built for). Repeats every escalation_hours for as long as it's still
+    # going, so a multi-day incident can't be missed after the first nudge either.
+    escalation_hours: int = 12
     default_severity_rules: dict[str, SeverityRule] = Field(default_factory=lambda: dict(DEFAULT_RULES))
     projects: list[Project] = Field(default_factory=list)
 
